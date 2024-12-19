@@ -8,3 +8,6 @@ This folder has examples related to basic usage of gemini and langchain for chat
 
 
 Please contact me for suggestions and comments at: faisalrahman36@hotmail.com
+
+Read my LinkedIn article to understand some of the code and related concepts:
+https://www.linkedin.com/pulse/building-study-plan-chatbot-google-genai-streamlit-syed-faisal-iyvff/
