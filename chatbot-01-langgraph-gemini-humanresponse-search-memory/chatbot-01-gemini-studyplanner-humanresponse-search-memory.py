@@ -7,6 +7,7 @@ from langgraph.prebuilt import ToolNode
 from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages
 from dotenv import load_dotenv
+from langchain_core.messages import ToolMessage
 
 # Load environment variables
 load_dotenv()
@@ -41,10 +42,23 @@ def ai_agent(state: State):
     """Handles student queries and determines if human help or search is needed."""
     user_query = state["messages"][-1]["content"].lower()
     
+    # If the user asks for a summary, generate a history summary
+    if "what did we do today" in user_query or "summarize chat history" in user_query:
+        chat_history_text = "\n".join(
+            [f"{msg['role']}: {msg['content']}" if isinstance(msg, dict) else f"Tool: {msg.content}" for msg in state["messages"]]
+        )
+        summary_prompt = f"Summarize this conversation history:\n\n{chat_history_text}"
+        response = llm.invoke([{"role": "user", "content": summary_prompt}])
+        response_content = response.content if hasattr(response, "content") else str(response)
+        state["messages"].append({"role": "ai", "content": response_content})
+        return state
+
+    # If the user wants an online search, trigger it
     if "search online" in user_query or "find on the internet" in user_query:
         state["search_requested"] = True
         return state
     
+    # Otherwise, continue with normal AI response
     response = llm.invoke(state["messages"])
     response_content = response.content if hasattr(response, "content") else str(response)
     
@@ -62,13 +76,14 @@ def search_online(state: State):
     results = search_tool.invoke(search_query)
     
     if not results:
-        state["messages"].append({"role": "search", "content": "No relevant search results found."})
-        return state
+        search_response = ToolMessage(content="No relevant search results found.", tool_call_id="search_tool_1", name="Tavily_Search")
+    else:
+        formatted_results = "\n\n".join(
+            [f"{res.get('url', 'No URL')}\n{res.get('content', 'No Content')}" for res in results]
+        )
+        search_response = ToolMessage(content=formatted_results, tool_call_id="search_tool_1", name="Tavily_Search")
     
-    formatted_results = "\n\n".join(
-        [f"{res.get('url', 'No URL')}\n{res.get('content', 'No Content')}" for res in results]
-    )
-    state["messages"].append({"role": "search", "content": formatted_results})
+    state["messages"].append(search_response)
     return state
 
 graph_builder.add_node("search", search_online)
@@ -115,16 +130,21 @@ if "search_requested" not in st.session_state:
 with st.sidebar:
     st.header("🗂️ Chat History")
     for msg in st.session_state["chat_history"]:
-        role = "👤 User" if msg["role"] == "user" else "🤖 AI" if msg["role"] == "ai" else "🌍 Search" if msg["role"] == "search" else "👨‍🏫 Human Assistant"
-        st.write(f"{role}: {msg['content']}")
+        if isinstance(msg, ToolMessage):
+            role = "🛠 Tool"
+            content = msg.content  # Correctly access `ToolMessage` content
+        else:
+            role = "👤 User" if msg["role"] == "user" else "🤖 AI" if msg["role"] == "ai" else "👨‍🏫 Human Assistant"
+            content = msg["content"]
+        st.write(f"{role}: {content}")
     
     st.header("📖 How to Use")
     st.markdown("""
     - 💬 Ask a study-related question.
     - 🤖 AI will respond.
     - 🌍 Write "search online" to trigger an internet search.
-    - 👨‍🏫 Write "human assistance" and then click "Fetch Human Response" if AI is needed to take human help.
-    - ✨ Your conversation history is saved.
+    - 👨‍🏫 Write "human assistance" and then click "Fetch Human Response" if AI is needed to take human help (It will simulate it by creating a text field.).
+    - ✨ Your conversation history is saved. You can use it by using prompts having: a) What did we do today b) Summarize chat history
     """)
 
 # Main Chat Interface
@@ -147,7 +167,7 @@ if st.button("Submit AI Query") and user_input:
 if st.session_state["search_requested"]:
     state = search_online(state)
     st.session_state["chat_history"].append(state["messages"][-1])
-    st.write("🌍 Internet Search Results:", state["messages"][-1]["content"])
+    st.write("🌍 Internet Search Results:", state["messages"][-1].content)
     st.session_state["search_requested"] = False
 
 # Handle Human Assistance Requests
